@@ -1,29 +1,30 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const { Client } = require('@notionhq/client');
-const { google } = require('googleapis');
+const helmet = require('helmet');
+const logger = require('./src/config/logger');
+
+// Middleware
+const corsMiddleware = require('./src/middleware/cors');
+const apiKeyAuth = require('./src/middleware/auth');
+const rateLimiter = require('./src/middleware/rateLimit');
+const errorHandler = require('./src/middleware/errorHandler');
+
+// Services
+const notionService = require('./src/services/notionService');
+const googleSheetsService = require('./src/services/googleSheetsService');
+const zapierService = require('./src/services/zapierService');
+
+// Validation
+const { validateLead } = require('./src/validation/leadValidation');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// Global Middleware
+app.use(helmet());
+app.use(corsMiddleware);
 app.use(express.json());
-
-// Notion Client
-const notion = new Client({ auth: process.env.NOTION_TOKEN });
-
-// Google Sheets Auth
-const auth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_SERVICE_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-  },
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
-
-const sheets = google.sheets({ version: 'v4', auth });
+app.use(rateLimiter);
 
 // Health Check
 app.get('/', (req, res) => {
@@ -31,49 +32,32 @@ app.get('/', (req, res) => {
 });
 
 // Lead Webhook Endpoint
-app.post('/webhook/lead', async (req, res) => {
+app.post('/webhook/lead', apiKeyAuth, async (req, res, next) => {
   try {
-    const { businessName, contactName, email, phone, website, notes } = req.body;
+    // Validate input
+    const validatedData = validateLead(req.body);
+    
+    logger.info('Received lead webhook', { email: validatedData.email });
 
-    // Add to Google Sheets
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.SPREADSHEET_ID,
-      range: 'business_leads_template!A:G',
-      valueInputOption: 'USER_ENTERED',
-      resource: {
-        values: [[
-          new Date().toISOString(),
-          businessName || '',
-          contactName || '',
-          email || '',
-          phone || '',
-          website || '',
-          notes || ''
-        ]]
-      }
+    // Execute all services in parallel
+    await Promise.allSettled([
+      notionService.createLeadEntry(validatedData),
+      googleSheetsService.appendLead(validatedData),
+      zapierService.sendWebhook(validatedData)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Lead processed successfully'
     });
-
-    // Add to Notion
-    await notion.pages.create({
-      parent: { database_id: process.env.NOTION_LEADS_DB },
-      properties: {
-        'Business Name': { title: [{ text: { content: businessName || '' } }] },
-        'Contact Name': { rich_text: [{ text: { content: contactName || '' } }] },
-        'Email': { email: email || null },
-        'Phone': { phone_number: phone || null },
-        'Website': { url: website || null },
-        'Notes': { rich_text: [{ text: { content: notes || '' } }] },
-        'Status': { select: { name: 'New' } }
-      }
-    });
-
-    res.json({ success: true, message: 'Lead added successfully' });
   } catch (error) {
-    console.error('Error processing lead:', error);
-    res.status(500).json({ success: false, error: error.message });
+    next(error);
   }
 });
 
+// Error Handler (must be last)
+app.use(errorHandler);
+
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info(`Server running on port ${PORT}`);
 });
