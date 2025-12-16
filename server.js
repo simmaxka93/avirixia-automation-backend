@@ -27,6 +27,9 @@ const { validateEnv } = require('./src/utils/envValidator');
 validateEnv();
 
 const app = express();
+
+// Enable trust proxy for Railway (behind reverse proxy)
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 // Initialize Sentry (before all other middleware)
