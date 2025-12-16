@@ -48,6 +48,7 @@ app.use(rateLimiter);
 
 // Health check routes (before API key auth)
 app.use('/health', healthRoutes);
+logger.info('Health routes loaded:', healthRoutes);
 
 // Legacy health check
 app.get('/', (req, res) => {
