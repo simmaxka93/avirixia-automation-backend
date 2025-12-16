@@ -43,7 +43,7 @@ app.use(corsMiddleware);
 app.use(express.json());
 app.use(rateLimiter);
 
-// Health check routes
+// Health check routes (before API key auth)
 app.use('/health', healthRoutes);
 
 // Legacy health check
